@@ -1,0 +1,491 @@
+Parameters:
+  ProjectName:
+    Type: String
+    Default: mybookstore
+
+Conditions:
+  IADRegion: !Equals [!Ref "AWS::Region", "us-east-1"]
+    
+Mappings:
+  S3Buckets:
+    us-east-1:
+      Bucket: aws-bookstore-demo-app-us-east-1
+      NeptuneDataBucket: bookstore-neptune
+    us-west-2:
+      Bucket: aws-bookstore-demo-app-us-west-2
+      NeptuneDataBucket: bookstore-neptune-us-west-2
+    eu-central-1:
+      Bucket: aws-bookstore-demo-app-eu-central-1
+      NeptuneDataBucket: bookstore-neptune-eu-central-1
+    eu-west-1:
+      Bucket: aws-bookstore-demo-app-eu-west-1
+      NeptuneDataBucket: bookstore-neptune-eu-west-1
+
+  Constants:
+    AppKeys:
+      SeedRepository: https://s3.amazonaws.com/aws-bookstore-demo/bookstore-webapp.zip
+      
+    S3Keys:
+      ListOrdersCode: functions/ListOrders.zip
+      GetBookCode: functions/GetBook.zip
+      ListBooksCode: functions/ListBooks.zip
+      UpdateCartCode: functions/UpdateCart.zip
+      GetCartItemCode: functions/GetCartItem.zip
+      ListItemsInCartCode: functions/ListItemsInCart.zip
+      AddToCartCode: functions/AddToCart.zip
+      RemoveFromCartCode: functions/RemoveFromCart.zip
+      GetBestSellersCode: functions/GetBestSellers.zip
+      CheckoutCode: functions/Checkout.zip
+      UploadBooksCode: functions/UploadBooks.zip
+      GetRecommendationsCode: functions/GetRecommendations.zip
+      GetRecommendationsByBookCode: functions/GetRecommendationsByBook.zip
+      SearchCode: functions/Search.zip
+      UpdateSearchCode: functions/UpdateSearchCluster.zip
+      UpdateBestSellersCode: functions/UpdateBestSellers.zip
+      NeptuneLoaderCode: functions/NeptuneLoader.zip
+      NeptuneIAMCode: functions/NeptuneIAM.zip
+      bookstoreNeptuneS3DataPath: /data/
+      booksData: data/books.json
+      CreateOSRoleCode: functions/CreateOSRole.zip
+      UpdateConfigCode: functions/UpdateConfig.zip
+      PythonLambdaLayer: functions/PythonLambdaLayer.zip
+      DeleteBucketsCode: functions/DeleteBuckets.zip
+      SeederFunctionCode: functions/aws-serverless-codecommit-seeder.zip
+      
+Resources:
+# ------------------------------------------------------------------------------
+# BOOK TABLE
+# ------------------------------------------------------------------------------      
+  TBooks:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      TableName: !Sub '${ProjectName}-Books'
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: category
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+      GlobalSecondaryIndexes:
+        - IndexName: category-index
+          KeySchema:
+            - AttributeName: category
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+          ProvisionedThroughput:
+            ReadCapacityUnits: 1
+            WriteCapacityUnits: 1
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+
+# ------------------------------------------------------------------------------
+# BOOK STREAM
+# ------------------------------------------------------------------------------
+  # DataTableStream:
+  #   Type: 'AWS::Lambda::EventSourceMapping'
+  #   Properties:
+  #     BatchSize: 1
+  #     Enabled: true
+  #     EventSourceArn: !GetAtt 
+  #       - TBooks
+  #       - StreamArn
+  #     FunctionName: !GetAtt 
+  #       - UpdateSearchCluster
+  #       - Arn
+  #     StartingPosition: TRIM_HORIZON
+  #   DependsOn: TBooks
+        
+  # UpdateSearchCluster:
+  #   Type: 'AWS::Lambda::Function'
+  #   Properties:
+  #     FunctionName: !Sub '${ProjectName}-UpdateSearchCluster'
+  #     Description: 'Update OpenSearch cluster as books are added'
+  #     Handler: index.handler
+  #     Role: !GetAtt 
+  #       - OSSearchRole
+  #       - Arn
+  #     Runtime: python3.9
+  #     Timeout: '60'
+  #     VpcConfig:
+  #       SecurityGroupIds:
+  #         - Fn::GetAtt: [bookstoreVPC, DefaultSecurityGroup]
+  #       SubnetIds:
+  #         - Ref: bookstoreSubnet1
+  #     Code:
+  #       S3Bucket: !FindInMap 
+  #         - S3Buckets
+  #         - !Ref 'AWS::Region'
+  #         - Bucket
+  #       S3Key: !FindInMap 
+  #         - Constants
+  #         - S3Keys
+  #         - UpdateSearchCode
+  #     Environment:
+  #       Variables:
+  #         ESENDPOINT: !GetAtt 
+  #           - OpenSearchDomain
+  #           - DomainEndpoint
+  #         REGION: !Ref 'AWS::Region'
+  #   DependsOn:
+  #     - OSSearchRole
+  #     - OpenSearchDomain
+  #     - TBooks
+  
+# ------------------------------------------------------------------------------
+# LAMBDA FUNCTIONS for Books
+# ------------------------------------------------------------------------------
+  DynamoDbRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub '${ProjectName}-DynamoDbLambda'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess'
+      Policies:
+        - PolicyName: PutRidePolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:PutItem'
+                  - 'dynamodb:Query'
+                  - 'dynamodb:UpdateTable'
+                  - 'dynamodb:UpdateItem'
+                  - 'dynamodb:BatchWriteItem'
+                  - 'dynamodb:GetItem'
+                  - 'dynamodb:Scan'
+                  - 'dynamodb:DeleteItem'
+                Resource:
+                  - !GetAtt 
+                    - TBooks
+                    - Arn
+                  # - !GetAtt 
+                  #   - TOrders
+                  #   - Arn
+                  # - !GetAtt 
+                  #   - TCart
+                  #   - Arn
+                  - !Join 
+                    - ''
+                    - - !GetAtt 
+                        - TBooks
+                        - Arn
+                      - /*
+                      
+  # FunctionUploadBooks:
+  #   Type: 'AWS::Lambda::Function'
+  #   Properties:
+  #     FunctionName: !Sub '${ProjectName}-UploadBooks'
+  #     Description: Upload sample data for books
+  #     Handler: index.handler
+  #     Runtime: nodejs12.x
+  #     Role: !GetAtt 
+  #       - DynamoDbRole
+  #       - Arn
+  #     Timeout: 120
+  #     Environment:
+  #       Variables:
+  #         TABLE_NAME: !Sub '${ProjectName}-Books'
+  #         S3_BUCKET: !FindInMap 
+  #                   - S3Buckets
+  #                   - !Ref 'AWS::Region'
+  #                   - Bucket
+  #         FILE_NAME: !FindInMap 
+  #                   - Constants
+  #                   - S3Keys
+  #                   - booksData
+  #     Code:
+  #       S3Bucket: !FindInMap 
+  #         - S3Buckets
+  #         - !Ref 'AWS::Region'
+  #         - Bucket
+  #       S3Key: !FindInMap 
+  #         - Constants
+  #         - S3Keys
+  #         - UploadBooksCode
+  #   # DependsOn: DataTableStream
+
+  # BooksUploader:
+  #   Type: 'Custom::CustomResource'
+  #   Properties:
+  #     ServiceToken: !GetAtt FunctionUploadBooks.Arn
+  #     ParameterOne: Parameter to pass into Custom Lambda Function
+  #     DependsOn: 
+  #     - FunctionUploadBooks
+  #     - UpdateSearchCluster
+  #     - OpenSearchDomain
+
+  FunctionListBooksPermissions:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref FunctionListBooks
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Join 
+        - ''
+        - - 'arn:aws:execute-api:'
+          - !Ref 'AWS::Region'
+          - ':'
+          - !Ref 'AWS::AccountId'
+          - ':'
+          - Fn::ImportValue: BOOKSTORE-API
+          - /*
+
+  FunctionListBooks:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Sub '${ProjectName}-ListBooks'
+      Description: Get list of books by category
+      Handler: index.handler
+      MemorySize: 256
+      Runtime: nodejs12.x
+      Role: !GetAtt 
+        - DynamoDbRole
+        - Arn
+      Timeout: 120
+      Environment:
+        Variables:
+          TABLE_NAME: !Sub '${ProjectName}-Books'
+      Code:
+        S3Bucket: !FindInMap 
+          - S3Buckets
+          - !Ref 'AWS::Region'
+          - Bucket
+        S3Key: !FindInMap 
+          - Constants
+          - S3Keys
+          - ListBooksCode
+
+  FunctionGetBookPermissions:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref FunctionGetBook
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Join 
+        - ''
+        - - 'arn:aws:execute-api:'
+          - !Ref 'AWS::Region'
+          - ':'
+          - !Ref 'AWS::AccountId'
+          - ':'
+          - Fn::ImportValue: BOOKSTORE-API
+          - /*
+          
+  FunctionGetBook:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Sub '${ProjectName}-GetBook'
+      Description: Get book by id
+      Handler: index.handler
+      MemorySize: 256
+      Runtime: nodejs12.x
+      Role: !GetAtt 
+        - DynamoDbRole
+        - Arn
+      Timeout: 120
+      Environment:
+        Variables:
+          TABLE_NAME: !Sub '${ProjectName}-Books'
+      Code:
+        S3Bucket: !FindInMap 
+          - S3Buckets
+          - !Ref 'AWS::Region'
+          - Bucket
+        S3Key: !FindInMap 
+          - Constants
+          - S3Keys
+          - GetBookCode
+
+# ------------------------------------------------------------------------------
+# API GATEWAY - Books
+# ------------------------------------------------------------------------------
+
+  BooksApiResource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId:
+        Fn::ImportValue: BOOKSTORE-API
+      ParentId: 
+        Fn::ImportValue: BOOKSTORE-API-ROOT-RESOURCE-ID
+      PathPart: books
+
+  BooksApiRequestGET:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      AuthorizationType: AWS_IAM
+      HttpMethod: GET
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Join 
+          - ''
+          - - 'arn:aws:apigateway:'
+            - !Ref 'AWS::Region'
+            - ':lambda:path/2015-03-31/functions/'
+            - !GetAtt 
+              - FunctionListBooks
+              - Arn
+            - /invocations
+        IntegrationResponses:
+          - StatusCode: 200
+      RequestParameters:
+        method.request.querystring.category: false
+      ResourceId: !Ref BooksApiResource
+      RestApiId: 
+        Fn::ImportValue: BOOKSTORE-API
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: Empty
+    DependsOn:
+      - FunctionListBooksPermissions
+
+  BooksApiRequestOPTIONS:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      ResourceId: !Ref BooksApiResource
+      RestApiId: 
+        Fn::ImportValue: BOOKSTORE-API
+      AuthorizationType: None
+      HttpMethod: OPTIONS
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: >-
+                'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'
+              method.response.header.Access-Control-Allow-Methods: '''GET,POST,PUT,DELETE,OPTIONS,HEAD,PATCH'''
+              method.response.header.Access-Control-Allow-Origin: '''*'''
+            ResponseTemplates:
+              application/json: ''
+            StatusCode: '200'
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - ResponseModels:
+            application/json: Empty
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          StatusCode: '200'
+
+  BookItemApiResource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId:
+        Fn::ImportValue: BOOKSTORE-API
+      ParentId: !Ref BooksApiResource
+      PathPart: '{id}'
+      
+  BookItemApiRequestGET:
+    DependsOn: FunctionGetBookPermissions
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      AuthorizationType: AWS_IAM
+      HttpMethod: GET
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Join 
+          - ''
+          - - 'arn:aws:apigateway:'
+            - !Ref 'AWS::Region'
+            - ':lambda:path/2015-03-31/functions/'
+            - !GetAtt 
+              - FunctionGetBook
+              - Arn
+            - /invocations
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: $input.json('$.body')
+      RequestParameters:
+        method.request.path.id: true
+      ResourceId: !Ref BookItemApiResource
+      RestApiId:
+        Fn::ImportValue: BOOKSTORE-API
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: Empty
+
+  BookItemApiRequestOPTIONS:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      ResourceId: !Ref BookItemApiResource
+      RestApiId:
+        Fn::ImportValue: BOOKSTORE-API
+      AuthorizationType: None
+      HttpMethod: OPTIONS
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: >-
+                'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'
+              method.response.header.Access-Control-Allow-Methods: '''GET,POST,PUT,DELETE,OPTIONS,HEAD,PATCH'''
+              method.response.header.Access-Control-Allow-Origin: '''*'''
+            ResponseTemplates:
+              application/json: ''
+            StatusCode: '200'
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - ResponseModels:
+            application/json: Empty
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          StatusCode: '200'
+
+# ------------------------------------------------------------------------------
+# API Deployment
+# ------------------------------------------------------------------------------
+  APIDeployment:
+    Type: 'AWS::ApiGateway::Deployment'
+    Properties:
+      Description: Prod deployment for API
+      RestApiId:
+        Fn::ImportValue: BOOKSTORE-API
+      StageName: prod
+    DependsOn:
+      - BooksApiRequestGET
+      - BooksApiRequestOPTIONS
+      - BookItemApiRequestGET
+      - BookItemApiRequestOPTIONS
+
+# ------------------------------------------------------------------------------
+# OUTPUTS
+# ------------------------------------------------------------------------------
+Outputs:
+  BookTableArn:
+    Value: 
+      !GetAtt TBooks.Arn
+    Export:
+      Name: BOOKSTORE-BOOKTABLE-ARN
+  BookTableStreamArn:
+    Value: 
+      !GetAtt TBooks.StreamArn
+    Export:
+      Name: BOOKSTORE-BOOKTABLE-STREAM-ARN

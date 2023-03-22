@@ -1,0 +1,402 @@
+Parameters:
+  ProjectName:
+    Type: String
+    Default: mybookstore
+
+Conditions:
+  IADRegion: !Equals [!Ref "AWS::Region", "us-east-1"]
+    
+Mappings:
+  S3Buckets:
+    us-east-1:
+      Bucket: aws-bookstore-demo-app-us-east-1
+      NeptuneDataBucket: bookstore-neptune
+    us-west-2:
+      Bucket: aws-bookstore-demo-app-us-west-2
+      NeptuneDataBucket: bookstore-neptune-us-west-2
+    eu-central-1:
+      Bucket: aws-bookstore-demo-app-eu-central-1
+      NeptuneDataBucket: bookstore-neptune-eu-central-1
+    eu-west-1:
+      Bucket: aws-bookstore-demo-app-eu-west-1
+      NeptuneDataBucket: bookstore-neptune-eu-west-1
+
+  Constants:
+    AppKeys:
+      SeedRepository: https://s3.amazonaws.com/aws-bookstore-demo/bookstore-webapp.zip
+      
+    S3Keys:
+      ListOrdersCode: functions/ListOrders.zip
+      GetBookCode: functions/GetBook.zip
+      ListBooksCode: functions/ListBooks.zip
+      UpdateCartCode: functions/UpdateCart.zip
+      GetCartItemCode: functions/GetCartItem.zip
+      ListItemsInCartCode: functions/ListItemsInCart.zip
+      AddToCartCode: functions/AddToCart.zip
+      RemoveFromCartCode: functions/RemoveFromCart.zip
+      GetBestSellersCode: functions/GetBestSellers.zip
+      CheckoutCode: functions/Checkout.zip
+      UploadBooksCode: functions/UploadBooks.zip
+      GetRecommendationsCode: functions/GetRecommendations.zip
+      GetRecommendationsByBookCode: functions/GetRecommendationsByBook.zip
+      SearchCode: functions/Search.zip
+      UpdateSearchCode: functions/UpdateSearchCluster.zip
+      UpdateBestSellersCode: functions/UpdateBestSellers.zip
+      NeptuneLoaderCode: functions/NeptuneLoader.zip
+      NeptuneIAMCode: functions/NeptuneIAM.zip
+      bookstoreNeptuneS3DataPath: /data/
+      booksData: data/books.json
+      CreateOSRoleCode: functions/CreateOSRole.zip
+      UpdateConfigCode: functions/UpdateConfig.zip
+      PythonLambdaLayer: functions/PythonLambdaLayer.zip
+      DeleteBucketsCode: functions/DeleteBuckets.zip
+      SeederFunctionCode: functions/aws-serverless-codecommit-seeder.zip
+      
+Resources:
+# ------------------------------------------------------------------------------
+# NEPTUNE SECURITY GROUP & SUBNET GROUP
+# ------------------------------------------------------------------------------
+
+  bookstoreNeptuneSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Security group for Neptune DB within book store app."
+      SecurityGroupIngress:
+        -
+          CidrIp: "0.0.0.0/0"
+          FromPort: 8182
+          ToPort: 8182
+          IpProtocol: tcp
+      VpcId:
+        Fn::ImportValue: BOOKSTORE-VPC
+
+  bookstoreNeptuneSubnetGroup:
+    Type: "AWS::Neptune::DBSubnetGroup"
+    Properties:
+      DBSubnetGroupDescription: "Subnet group for Neptune DB within book store app."
+      SubnetIds:
+        - Fn::ImportValue: BOOKSTORE-SUBNET-1
+        - Fn::ImportValue: BOOKSTORE-SUBNET-2
+  
+# ------------------------------------------------------------------------------
+# NEPTUNE CLUSTER
+# ------------------------------------------------------------------------------
+
+  bookstoreNeptuneCluster:
+    Type: "AWS::Neptune::DBCluster"
+    Properties:
+      IamAuthEnabled : false
+      DBSubnetGroupName:
+        Ref: bookstoreNeptuneSubnetGroup
+      VpcSecurityGroupIds: [ !GetAtt bookstoreNeptuneSecurityGroup.GroupId ]
+      
+  bookstoreNeptuneDB:
+    Type: "AWS::Neptune::DBInstance"
+    Properties:
+      DBClusterIdentifier: !Ref bookstoreNeptuneCluster
+      DBInstanceClass: "db.t3.medium"
+
+# ------------------------------------------------------------------------------
+# LAMBDA FUNCTIONS for NEPTUNE
+# ------------------------------------------------------------------------------
+  RecommendationsLambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub '${ProjectName}-RecommendationsLambdaRole'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: RecommendationsLambdaRoleEC2
+          PolicyDocument:
+            Statement:
+              - Action:
+                  - 'ec2:CreateNetworkInterface'
+                  - 'ec2:DescribeNetworkInterfaces'
+                  - 'ec2:DeleteNetworkInterface'
+                  - 'ec2:DetachNetworkInterface'
+                Effect: Allow
+                Resource: '*'
+            Version: 2012-10-17
+            
+  FunctionGetRecommendationsPermissions:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref FunctionGetRecommendations
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Join 
+        - ''
+        - - 'arn:aws:execute-api:'
+          - !Ref 'AWS::Region'
+          - ':'
+          - !Ref 'AWS::AccountId'
+          - ':'
+          - Fn::ImportValue: BOOKSTORE-API
+          - /*
+
+  FunctionGetRecommendations:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Sub '${ProjectName}-GetRecommendations'
+      Code:
+        S3Bucket: !FindInMap 
+          - S3Buckets
+          - !Ref 'AWS::Region'
+          - Bucket
+        S3Key: !FindInMap 
+          - Constants
+          - S3Keys
+          - GetRecommendationsCode
+      Description: Get the top 5 product recommendations from Neptune
+      Environment:
+        Variables:
+          neptunedb: !GetAtt bookstoreNeptuneCluster.Endpoint
+      Handler: index.handler
+      MemorySize: 256
+      Role:
+        'Fn::GetAtt':
+          - RecommendationsLambdaRole
+          - Arn
+      Runtime: python3.9
+      Timeout: 30
+      VpcConfig:
+        SecurityGroupIds:
+          - Ref: bookstoreNeptuneSecurityGroup
+        SubnetIds:
+          - Fn::ImportValue: BOOKSTORE-SUBNET-1
+          - Fn::ImportValue: BOOKSTORE-SUBNET-2
+
+  FunctionGetRecommendationsByBookPermissions:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref FunctionGetRecommendationsByBook
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Join 
+        - ''
+        - - 'arn:aws:execute-api:'
+          - !Ref 'AWS::Region'
+          - ':'
+          - !Ref 'AWS::AccountId'
+          - ':'
+          - Fn::ImportValue: BOOKSTORE-API
+          - /*
+          
+  FunctionGetRecommendationsByBook:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Sub '${ProjectName}-GetRecommendationsByBook'
+      Code:
+        S3Bucket: !FindInMap 
+          - S3Buckets
+          - !Ref 'AWS::Region'
+          - Bucket
+        S3Key: !FindInMap 
+          - Constants
+          - S3Keys
+          - GetRecommendationsByBookCode
+      Description: Get friends who purchased this book
+      Environment:
+        Variables:
+          neptunedb: !GetAtt bookstoreNeptuneCluster.Endpoint 
+      Handler: index.handler
+      MemorySize: 256
+      Role:
+        'Fn::GetAtt':
+          - RecommendationsLambdaRole
+          - Arn
+      Runtime: python3.9
+      Timeout: 30
+      VpcConfig:
+        SecurityGroupIds:
+          - Ref: bookstoreNeptuneSecurityGroup
+        SubnetIds:
+          - Fn::ImportValue: BOOKSTORE-SUBNET-1
+          - Fn::ImportValue: BOOKSTORE-SUBNET-2
+
+# ------------------------------------------------------------------------------
+# API GATEWAY - Recommendation
+# ------------------------------------------------------------------------------
+  RecommendationsApiResource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId: 
+        Fn::ImportValue: BOOKSTORE-API
+      ParentId: 
+        Fn::ImportValue: BOOKSTORE-API-ROOT-RESOURCE-ID
+      PathPart: recommendations
+      
+  RecommendationsByBookApiResource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId:
+        Fn::ImportValue: BOOKSTORE-API
+      ParentId: !Ref RecommendationsApiResource
+      PathPart: '{bookId}'
+      
+  RecomendationsApiRequestGET:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      AuthorizationType: AWS_IAM
+      HttpMethod: GET
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Join 
+          - ''
+          - - 'arn:aws:apigateway:'
+            - !Ref 'AWS::Region'
+            - ':lambda:path/2015-03-31/functions/'
+            - !GetAtt 
+              - FunctionGetRecommendations
+              - Arn
+            - /invocations
+        IntegrationResponses:
+          - StatusCode: 200
+      ResourceId: !Ref RecommendationsApiResource
+      RestApiId: 
+        Fn::ImportValue: BOOKSTORE-API
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: Empty
+    DependsOn:
+      - FunctionGetRecommendations
+            
+  RecomendationsApiRequestOPTIONS:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      ResourceId: !Ref RecommendationsApiResource
+      RestApiId: 
+        Fn::ImportValue: BOOKSTORE-API
+      AuthorizationType: None
+      HttpMethod: OPTIONS
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: >-
+                'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'
+              method.response.header.Access-Control-Allow-Methods: '''GET,POST,PUT,DELETE,OPTIONS,HEAD,PATCH'''
+              method.response.header.Access-Control-Allow-Origin: '''*'''
+            ResponseTemplates:
+              application/json: ''
+            StatusCode: '200'
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - ResponseModels:
+            application/json: Empty
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          StatusCode: '200'
+          
+  RecomendationsByBookApiRequestGET:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      AuthorizationType: AWS_IAM
+      HttpMethod: GET
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Join 
+          - ''
+          - - 'arn:aws:apigateway:'
+            - !Ref 'AWS::Region'
+            - ':lambda:path/2015-03-31/functions/'
+            - !GetAtt 
+              - FunctionGetRecommendationsByBook
+              - Arn
+            - /invocations
+        IntegrationResponses:
+          - StatusCode: 200
+      ResourceId: !Ref RecommendationsByBookApiResource
+      RequestParameters:
+        method.request.path.bookId: false
+      RestApiId:
+        Fn::ImportValue: BOOKSTORE-API
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: Empty
+    DependsOn:
+      - FunctionGetRecommendationsByBook
+      
+  RecomendationsByBookApiRequestOPTIONS:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      ResourceId: !Ref RecommendationsByBookApiResource
+      RestApiId:
+        Fn::ImportValue: BOOKSTORE-API
+      AuthorizationType: None
+      HttpMethod: OPTIONS
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: >-
+                'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'
+              method.response.header.Access-Control-Allow-Methods: '''GET,POST,PUT,DELETE,OPTIONS,HEAD,PATCH'''
+              method.response.header.Access-Control-Allow-Origin: '''*'''
+            ResponseTemplates:
+              application/json: ''
+            StatusCode: '200'
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - ResponseModels:
+            application/json: Empty
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          StatusCode: '200'
+
+# ------------------------------------------------------------------------------
+# API Deployment
+# ------------------------------------------------------------------------------
+  APIDeployment:
+    Type: 'AWS::ApiGateway::Deployment'
+    Properties:
+      Description: Prod deployment for API
+      RestApiId:
+        Fn::ImportValue: BOOKSTORE-API
+      StageName: prod
+    DependsOn:
+      - RecomendationsApiRequestGET
+      - RecomendationsApiRequestOPTIONS
+      - RecomendationsByBookApiRequestGET
+      - RecomendationsByBookApiRequestOPTIONS
+
+# ------------------------------------------------------------------------------
+# OUTPUTS
+# ------------------------------------------------------------------------------
+Outputs:
+  NeptuneSecurityGroup:
+    Value: 
+      Ref: bookstoreNeptuneSecurityGroup
+    Export:
+      Name: BOOKSTORE-NEPTUNE-SECURITY-GROUP
+  NeptuneCluster:
+    Value: 
+      Ref: bookstoreNeptuneCluster
+    Export:
+      Name: BOOKSTORE-NEPTUNE-CLUSTER
+  NeptuneClusterEndpoint:
+    Value: 
+      !GetAtt bookstoreNeptuneCluster.Endpoint
+    Export:
+      Name: BOOKSTORE-NEPTUNE-CLUSTER-ENDPOINT

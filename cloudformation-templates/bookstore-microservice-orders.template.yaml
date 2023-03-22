@@ -1,0 +1,316 @@
+Parameters:
+  ProjectName:
+    Type: String
+    Default: mybookstore
+
+Conditions:
+  IADRegion: !Equals [!Ref "AWS::Region", "us-east-1"]
+    
+Mappings:
+  S3Buckets:
+    us-east-1:
+      Bucket: aws-bookstore-demo-app-us-east-1
+      NeptuneDataBucket: bookstore-neptune
+    us-west-2:
+      Bucket: aws-bookstore-demo-app-us-west-2
+      NeptuneDataBucket: bookstore-neptune-us-west-2
+    eu-central-1:
+      Bucket: aws-bookstore-demo-app-eu-central-1
+      NeptuneDataBucket: bookstore-neptune-eu-central-1
+    eu-west-1:
+      Bucket: aws-bookstore-demo-app-eu-west-1
+      NeptuneDataBucket: bookstore-neptune-eu-west-1
+
+  Constants:
+    AppKeys:
+      SeedRepository: https://s3.amazonaws.com/aws-bookstore-demo/bookstore-webapp.zip
+      
+    S3Keys:
+      ListOrdersCode: functions/ListOrders.zip
+      GetBookCode: functions/GetBook.zip
+      ListBooksCode: functions/ListBooks.zip
+      UpdateCartCode: functions/UpdateCart.zip
+      GetCartItemCode: functions/GetCartItem.zip
+      ListItemsInCartCode: functions/ListItemsInCart.zip
+      AddToCartCode: functions/AddToCart.zip
+      RemoveFromCartCode: functions/RemoveFromCart.zip
+      GetBestSellersCode: functions/GetBestSellers.zip
+      CheckoutCode: functions/Checkout.zip
+      UploadBooksCode: functions/UploadBooks.zip
+      GetRecommendationsCode: functions/GetRecommendations.zip
+      GetRecommendationsByBookCode: functions/GetRecommendationsByBook.zip
+      SearchCode: functions/Search.zip
+      UpdateSearchCode: functions/UpdateSearchCluster.zip
+      UpdateBestSellersCode: functions/UpdateBestSellers.zip
+      NeptuneLoaderCode: functions/NeptuneLoader.zip
+      NeptuneIAMCode: functions/NeptuneIAM.zip
+      bookstoreNeptuneS3DataPath: /data/
+      booksData: data/books.json
+      CreateOSRoleCode: functions/CreateOSRole.zip
+      UpdateConfigCode: functions/UpdateConfig.zip
+      PythonLambdaLayer: functions/PythonLambdaLayer.zip
+      DeleteBucketsCode: functions/DeleteBuckets.zip
+      SeederFunctionCode: functions/aws-serverless-codecommit-seeder.zip
+      
+Resources:
+# ------------------------------------------------------------------------------
+# ORDER TABLE
+# ------------------------------------------------------------------------------
+
+  TOrders:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      TableName: !Sub '${ProjectName}-Orders'
+      AttributeDefinitions:
+        - AttributeName: customerId
+          AttributeType: S
+        - AttributeName: orderId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: customerId
+          KeyType: HASH
+        - AttributeName: orderId
+          KeyType: RANGE
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES 
+        
+# ------------------------------------------------------------------------------
+# LAMBDA FUNCTIONS for Orders
+# ------------------------------------------------------------------------------
+  DynamoDbRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub '${ProjectName}-DynamoDbLambda-Orders'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess'
+      Policies:
+        - PolicyName: PutRidePolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:PutItem'
+                  - 'dynamodb:Query'
+                  - 'dynamodb:UpdateTable'
+                  - 'dynamodb:UpdateItem'
+                  - 'dynamodb:BatchWriteItem'
+                  - 'dynamodb:GetItem'
+                  - 'dynamodb:Scan'
+                  - 'dynamodb:DeleteItem'
+                Resource:
+                  - !GetAtt 
+                    - TOrders
+                    - Arn
+                  - Fn::ImportValue: BOOKSTORE-CART-TABLE-ARN
+                      
+  FunctionListOrdersPermissions:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref FunctionListOrders
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Join 
+        - ''
+        - - 'arn:aws:execute-api:'
+          - !Ref 'AWS::Region'
+          - ':'
+          - !Ref 'AWS::AccountId'
+          - ':'
+          - Fn::ImportValue: BOOKSTORE-API
+          - /*
+
+  FunctionListOrders:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Sub '${ProjectName}-ListOrders'
+      Description: Get list of books ordered by customerId
+      Handler: index.handler
+      MemorySize: 256
+      Runtime: nodejs12.x
+      Role: !GetAtt 
+        - DynamoDbRole
+        - Arn
+      Timeout: 120
+      Environment:
+        Variables:
+          TABLE_NAME: !Sub '${ProjectName}-Orders'
+      Code:
+        S3Bucket: !FindInMap 
+          - S3Buckets
+          - !Ref 'AWS::Region'
+          - Bucket
+        S3Key: !FindInMap 
+          - Constants
+          - S3Keys
+          - ListOrdersCode
+
+  FunctionCheckoutPermissions:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref FunctionCheckout
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Join 
+        - ''
+        - - 'arn:aws:execute-api:'
+          - !Ref 'AWS::Region'
+          - ':'
+          - !Ref 'AWS::AccountId'
+          - ':'
+          - Fn::ImportValue: BOOKSTORE-API
+          - /*
+
+  FunctionCheckout:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Sub '${ProjectName}-Checkout'
+      Description: Get list of books ordered by customerId
+      Handler: index.handler
+      MemorySize: 256
+      Runtime: nodejs12.x
+      Role: !GetAtt 
+        - DynamoDbRole
+        - Arn
+      Timeout: 120
+      Environment:
+        Variables:
+          ORDERS_TABLE: !Sub '${ProjectName}-Orders'
+          CART_TABLE: !Sub '${ProjectName}-Cart'
+      Code:
+        S3Bucket: !FindInMap 
+          - S3Buckets
+          - !Ref 'AWS::Region'
+          - Bucket
+        S3Key: !FindInMap 
+          - Constants
+          - S3Keys
+          - CheckoutCode
+
+# ------------------------------------------------------------------------------
+# API GATEWAY - Orders
+# ------------------------------------------------------------------------------
+
+  OrdersApiResource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId:
+        Fn::ImportValue: BOOKSTORE-API
+      ParentId:
+        Fn::ImportValue: BOOKSTORE-API-ROOT-RESOURCE-ID
+      PathPart: orders
+
+  OrdersApiRequestGET:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      AuthorizationType: AWS_IAM
+      HttpMethod: GET
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Join 
+          - ''
+          - - 'arn:aws:apigateway:'
+            - !Ref 'AWS::Region'
+            - ':lambda:path/2015-03-31/functions/'
+            - !GetAtt 
+              - FunctionListOrders
+              - Arn
+            - /invocations
+        IntegrationResponses:
+          - StatusCode: 200
+      ResourceId: !Ref OrdersApiResource
+      RestApiId:
+        Fn::ImportValue: BOOKSTORE-API
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: Empty
+    DependsOn: FunctionListOrdersPermissions
+
+  OrdersApiRequestPOST:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      AuthorizationType: AWS_IAM
+      HttpMethod: POST
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Join 
+          - ''
+          - - 'arn:aws:apigateway:'
+            - !Ref 'AWS::Region'
+            - ':lambda:path/2015-03-31/functions/'
+            - !GetAtt 
+              - FunctionCheckout
+              - Arn
+            - /invocations
+        IntegrationResponses:
+          - StatusCode: 200
+      ResourceId: !Ref OrdersApiResource
+      RestApiId:
+        Fn::ImportValue: BOOKSTORE-API
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: Empty
+    DependsOn: FunctionCheckoutPermissions
+
+  OrdersApiRequestOPTIONS:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      ResourceId: !Ref OrdersApiResource
+      RestApiId:
+        Fn::ImportValue: BOOKSTORE-API
+      AuthorizationType: None
+      HttpMethod: OPTIONS
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: >-
+                'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'
+              method.response.header.Access-Control-Allow-Methods: '''GET,POST,PUT,DELETE,OPTIONS,HEAD,PATCH'''
+              method.response.header.Access-Control-Allow-Origin: '''*'''
+            ResponseTemplates:
+              application/json: ''
+            StatusCode: '200'
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - ResponseModels:
+            application/json: Empty
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          StatusCode: '200'
+
+# ------------------------------------------------------------------------------
+# API Deployment
+# ------------------------------------------------------------------------------
+  APIDeployment:
+    Type: 'AWS::ApiGateway::Deployment'
+    Properties:
+      Description: Prod deployment for API
+      RestApiId:
+        Fn::ImportValue: BOOKSTORE-API
+      StageName: prod
+    DependsOn:
+      - OrdersApiRequestGET
+      - OrdersApiRequestPOST
+      - OrdersApiRequestOPTIONS

@@ -1,0 +1,135 @@
+Parameters:
+  ProjectName:
+    Type: String
+    Default: mybookstore
+
+Conditions:
+  IADRegion: !Equals [!Ref "AWS::Region", "us-east-1"]
+    
+Mappings:
+  S3Buckets:
+    us-east-1:
+      Bucket: aws-bookstore-demo-app-us-east-1
+      NeptuneDataBucket: bookstore-neptune
+    us-west-2:
+      Bucket: aws-bookstore-demo-app-us-west-2
+      NeptuneDataBucket: bookstore-neptune-us-west-2
+    eu-central-1:
+      Bucket: aws-bookstore-demo-app-eu-central-1
+      NeptuneDataBucket: bookstore-neptune-eu-central-1
+    eu-west-1:
+      Bucket: aws-bookstore-demo-app-eu-west-1
+      NeptuneDataBucket: bookstore-neptune-eu-west-1
+
+  Constants:
+    AppKeys:
+      SeedRepository: https://s3.amazonaws.com/aws-bookstore-demo/bookstore-webapp.zip
+      
+    S3Keys:
+      ListOrdersCode: functions/ListOrders.zip
+      GetBookCode: functions/GetBook.zip
+      ListBooksCode: functions/ListBooks.zip
+      UpdateCartCode: functions/UpdateCart.zip
+      GetCartItemCode: functions/GetCartItem.zip
+      ListItemsInCartCode: functions/ListItemsInCart.zip
+      AddToCartCode: functions/AddToCart.zip
+      RemoveFromCartCode: functions/RemoveFromCart.zip
+      GetBestSellersCode: functions/GetBestSellers.zip
+      CheckoutCode: functions/Checkout.zip
+      UploadBooksCode: functions/UploadBooks.zip
+      GetRecommendationsCode: functions/GetRecommendations.zip
+      GetRecommendationsByBookCode: functions/GetRecommendationsByBook.zip
+      SearchCode: functions/Search.zip
+      UpdateSearchCode: functions/UpdateSearchCluster.zip
+      UpdateBestSellersCode: functions/UpdateBestSellers.zip
+      NeptuneLoaderCode: functions/NeptuneLoader.zip
+      NeptuneIAMCode: functions/NeptuneIAM.zip
+      bookstoreNeptuneS3DataPath: /data/
+      booksData: data/books.json
+      CreateOSRoleCode: functions/CreateOSRole.zip
+      UpdateConfigCode: functions/UpdateConfig.zip
+      PythonLambdaLayer: functions/PythonLambdaLayer.zip
+      DeleteBucketsCode: functions/DeleteBuckets.zip
+      SeederFunctionCode: functions/aws-serverless-codecommit-seeder.zip
+      
+Resources:
+# ------------------------------------------------------------------------------
+# BOOK LOADER
+# ------------------------------------------------------------------------------
+  DynamoDbRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub '${ProjectName}-DynamoDbLambda-book-loader'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess'
+      Policies:
+        - PolicyName: PutRidePolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:PutItem'
+                  - 'dynamodb:Query'
+                  - 'dynamodb:UpdateTable'
+                  - 'dynamodb:UpdateItem'
+                  - 'dynamodb:BatchWriteItem'
+                  - 'dynamodb:GetItem'
+                  - 'dynamodb:Scan'
+                  - 'dynamodb:DeleteItem'
+                Resource:
+                  - Fn::ImportValue: BOOKSTORE-BOOKTABLE-ARN
+                  - !Join 
+                    - ''
+                    - - Fn::ImportValue: BOOKSTORE-BOOKTABLE-ARN
+                      - /*
+                      
+  FunctionUploadBooks:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Sub '${ProjectName}-UploadBooks'
+      Description: Upload sample data for books
+      Handler: index.handler
+      Runtime: nodejs12.x
+      Role: !GetAtt 
+        - DynamoDbRole
+        - Arn
+      Timeout: 120
+      Environment:
+        Variables:
+          TABLE_NAME: !Sub '${ProjectName}-Books'
+          S3_BUCKET: !FindInMap 
+                    - S3Buckets
+                    - !Ref 'AWS::Region'
+                    - Bucket
+          FILE_NAME: !FindInMap 
+                    - Constants
+                    - S3Keys
+                    - booksData
+      Code:
+        S3Bucket: !FindInMap 
+          - S3Buckets
+          - !Ref 'AWS::Region'
+          - Bucket
+        S3Key: !FindInMap 
+          - Constants
+          - S3Keys
+          - UploadBooksCode
+
+  BooksUploader:
+    Type: 'Custom::CustomResource'
+    Properties:
+      ServiceToken: !GetAtt FunctionUploadBooks.Arn
+      ParameterOne: Parameter to pass into Custom Lambda Function
+      DependsOn: 
+       - FunctionUploadBooks
