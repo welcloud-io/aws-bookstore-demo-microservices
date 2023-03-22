@@ -1,7 +1,5 @@
 ## AWS Bookstore Demo Microservices
 
-#### !! THIS IS WORK IN PROGESS !!
-
 This repo contains a demo of a basic microservices architecture with AWS.
 
 It has been built and relies on resources from this demo: 
@@ -14,7 +12,7 @@ This template is now split into multiple templates (one per microservice)
 which makes things easier to understand and evolve.
 
 ---
-##### !! IMPORTANT NOTES !!
+### !! IMPORTANT NOTES !!
 
 **THIS DEMO CAN INCUR COST**: Creating this demo application in your AWS account will create and consume AWS resources, 
 which **will cost money**. We estimate that running this full demo application will cost **~$0.45/hour** with light usage. 
