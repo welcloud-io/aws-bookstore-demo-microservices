@@ -1,13 +1,11 @@
 ## AWS Bookstore Demo Microservices
 
 This repo contains a demo of a basic microservices architecture with AWS.
-
 It has been built and relies on resources from this demo: 
 
 https://github.com/aws-samples/aws-bookstore-demo-app
 
 which contains one big cloudformation template.
-
 This template is now split into multiple templates (one per microservice) 
 which makes things easier to understand and evolve.
 
