@@ -141,7 +141,7 @@ Open the app, add a book into your cart and you should see friends who bought th
 
 **To tear down only one microservice**, follow these steps:
 
-1. Log into the AWS CloudFormation Console and find the stack you created for the microervice
+1. Log into the AWS CloudFormation Console and find the stack you created for the microservice
 2. Delete the microservice stack
 
 **To tear down the entire application** and remove all resources associated with AWS Bookstore Demo App, follow these steps:
